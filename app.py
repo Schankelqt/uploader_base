@@ -1,8 +1,7 @@
 from flask import Flask, request, jsonify
 import requests
 import os
-from utils.github import upload_to_github
-
+from github import upload_to_github
 app = Flask(__name__)
 
 @app.route("/", methods=["GET"])
