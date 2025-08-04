@@ -1,76 +1,35 @@
-import logging
 from flask import Flask, request, jsonify
-from github import Github
-from dotenv import load_dotenv
-import os
 import requests
+import os
+from utils.github import upload_to_github
 
-# Настройка логгера
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger(__name__)
-
-# Загрузка переменных окружения
-load_dotenv()
-
-# Flask-приложение
 app = Flask(__name__)
 
 @app.route("/", methods=["GET"])
-def home():
-    return "Сервер работает!"
+def health_check():
+    return "Uploader Base is running!"
 
-@app.route("/upload", methods=["POST"])
-def upload():
+@app.route("/upload-url", methods=["POST"])
+def upload_url():
+    data = request.json
+    file_url = data.get("file_url")
+    filename = data.get("filename")
+
+    if not file_url or not filename:
+        return jsonify({"error": "Missing file_url or filename"}), 400
+
     try:
-        logger.info(f"📦 Headers: {dict(request.headers)}")
-        logger.info(f"📦 Raw body: {request.data}")
+        # Загружаем файл по ссылке
+        response = requests.get(file_url)
+        response.raise_for_status()
+        file_content = response.content
 
-        # Попытка загрузки как JSON
-        try:
-            data = request.get_json(force=True)
-        except Exception as json_error:
-            logger.warning(f"⚠️ Не удалось распарсить JSON: {json_error}")
-            data = request.form.to_dict()
-            logger.info(f"📥 Попробовали как form-data: {data}")
+        # Загружаем на GitHub
+        upload_to_github(filename, file_content)
 
-        file_url = data.get("file_url")
-        logger.info(f"🔗 URL файла: {file_url}")
-
-        if not file_url or not file_url.endswith(".xmind"):
-            return jsonify({"error": "❌ Поддерживаются только файлы с расширением .xmind"}), 400
-
-        # Загрузка файла
-        file_response = requests.get(file_url)
-        if file_response.status_code != 200:
-            return jsonify({"error": f"⚠️ Не удалось скачать файл. Код: {file_response.status_code}"}), 400
-
-        content = file_response.content
-        filename = file_url.split("/")[-1]
-
-        github_token = os.getenv("GITHUB_TOKEN")
-        repo_name = os.getenv("GITHUB_REPO")
-        branch = os.getenv("GITHUB_BRANCH", "main")
-        target_path = os.getenv("GITHUB_TARGET_PATH", "matrix.xmind")
-
-        g = Github(github_token)
-        repo = g.get_repo(repo_name)
-        current_file = repo.get_contents(target_path, ref=branch)
-
-        repo.update_file(
-            path=target_path,
-            message=f"Автоматическое обновление файла {filename} через Dify",
-            content=content,
-            sha=current_file.sha,
-            branch=branch
-        )
-
-        logger.info("✅ Файл успешно обновлён на GitHub")
-        return jsonify({"message": "Файл успешно обновлён на GitHub"}), 200
-
+        return jsonify({"status": "success", "message": f"Uploaded {filename} to GitHub"})
     except Exception as e:
-        logger.error(f"🔥 Ошибка сервера: {str(e)}")
-        return jsonify({"error": str(e)}), 500
+        return jsonify({"status": "error", "message": str(e)}), 500
 
 if __name__ == "__main__":
-    port = int(os.environ.get("PORT", 5000))
-    app.run(host="0.0.0.0", port=port)
+    app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 5000)))
