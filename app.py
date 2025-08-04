@@ -2,8 +2,9 @@ from flask import Flask, request, jsonify
 from github import Github
 from dotenv import load_dotenv
 import os
+import requests
 
-# Загружаем переменные окружения из .env
+# Загрузка переменных окружения из .env
 load_dotenv()
 
 app = Flask(__name__)
@@ -14,75 +15,50 @@ def home():
 
 @app.route("/upload", methods=["POST"])
 def upload():
-    # 🔍 ЛОГИРОВАНИЕ ДЛЯ ОТЛАДКИ
-    print("🔽 Получен POST-запрос на /upload")
-    print("🔍 Заголовки:", dict(request.headers))
-
-    # Попробуем понять, что было в теле
     try:
-        json_data = request.get_json(force=True)
-        print("🔍 Получен JSON:", json_data)
-    except Exception:
-        json_data = None
-        print("⚠️ JSON не распарсился")
+        data = request.get_json()
+        file_url = data.get("file")
 
-    print("🔍 Форм-поля:", request.form)
-    print("🔍 Файлы:", request.files)
+        if not file_url or not file_url.endswith(".xmind"):
+            return jsonify({"error": "❌ Поддерживаются только файлы с расширением .xmind"}), 400
 
-    # Поддержка загрузки через form-data
-    file = request.files.get("file")
+        # Скачиваем содержимое файла
+        response = requests.get(file_url)
+        if response.status_code != 200:
+            return jsonify({"error": f"Не удалось скачать файл по ссылке: {file_url}"}), 400
+        content = response.content
+        filename = os.path.basename(file_url)
 
-    # Если не найден файл – возможно, прислали URL в json
-    if not file and json_data and "file" in json_data:
-        from urllib.request import urlopen
-        from io import BytesIO
-
-        try:
-            file_url = json_data["file"]
-            filename = file_url.split("/")[-1] or "matrix.xmind"
-            if not filename.endswith(".xmind"):
-                return jsonify({"error": "Файл должен иметь расширение .xmind"}), 400
-
-            print(f"⬇️ Загружаем файл по ссылке: {file_url}")
-            response = urlopen(file_url)
-            content = response.read()
-        except Exception as e:
-            return jsonify({"error": f"Не удалось загрузить файл по ссылке: {str(e)}"}), 400
-    elif file:
-        filename = file.filename
-        if not filename.endswith(".xmind"):
-            return jsonify({"error": "Неверный формат файла. Только .xmind"}), 400
-        content = file.read()
-    else:
-        return jsonify({"error": "Файл не передан"}), 400
-
-    # Обновление файла на GitHub
-    try:
+        # Работа с GitHub
         github_token = os.getenv("GITHUB_TOKEN")
         repo_name = os.getenv("GITHUB_REPO")
         branch = os.getenv("GITHUB_BRANCH", "main")
         target_path = os.getenv("GITHUB_TARGET_PATH", "matrix.xmind")
 
-        if not all([github_token, repo_name]):
-            return jsonify({"error": "Не заданы переменные окружения GITHUB_TOKEN или GITHUB_REPO"}), 500
-
         g = Github(github_token)
         repo = g.get_repo(repo_name)
-        current_file = repo.get_contents(target_path, ref=branch)
 
-        repo.update_file(
-            path=target_path,
-            message=f"Обновление из Dify: {filename}",
-            content=content,
-            sha=current_file.sha,
-            branch=branch
-        )
+        try:
+            current_file = repo.get_contents(target_path, ref=branch)
+            repo.update_file(
+                path=target_path,
+                message=f"Автоматическое обновление файла {filename} через Dify",
+                content=content,
+                sha=current_file.sha,
+                branch=branch
+            )
+        except Exception:
+            # Если файла не существует — создаём
+            repo.create_file(
+                path=target_path,
+                message=f"Создание нового файла {filename} через Dify",
+                content=content,
+                branch=branch
+            )
 
-        print("✅ Файл успешно обновлён на GitHub")
-        return jsonify({"message": "Файл успешно обновлён на GitHub"}), 200
+        return jsonify({"message": "✅ Файл успешно загружен на GitHub"}), 200
 
     except Exception as e:
-        print("❌ Ошибка при обновлении файла:", str(e))
         return jsonify({"error": str(e)}), 500
 
 if __name__ == "__main__":
