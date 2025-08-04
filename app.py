@@ -1,31 +1,26 @@
-from flask import Flask, request, Response
+from flask import Flask, request, jsonify
 from github import Github
 from dotenv import load_dotenv
 import os
-import json
 
 # Загружаем переменные окружения из .env
 load_dotenv()
 
 app = Flask(__name__)
 
+@app.route("/", methods=["GET"])
+def home():
+    return "Сервер работает!"
+
 @app.route("/upload", methods=["POST"])
 def upload():
     file = request.files.get("file")
     if not file:
-        return Response(
-            json.dumps({"error": "Файл не передан"}, ensure_ascii=False),
-            mimetype='application/json',
-            status=400
-        )
+        return jsonify({"error": "Файл не передан"}), 400
 
     filename = file.filename
     if not filename.endswith(".xmind"):
-        return Response(
-            json.dumps({"error": "Неверный формат файла. Только .xmind"}, ensure_ascii=False),
-            mimetype='application/json',
-            status=400
-        )
+        return jsonify({"error": "Неверный формат файла. Только .xmind"}), 400
 
     content = file.read()
 
@@ -47,18 +42,10 @@ def upload():
             branch=branch
         )
 
-        return Response(
-            json.dumps({"message": "Файл успешно обновлён на GitHub"}, ensure_ascii=False),
-            mimetype='application/json',
-            status=200
-        )
+        return jsonify({"message": "Файл успешно обновлён на GitHub"}), 200
 
     except Exception as e:
-        return Response(
-            json.dumps({"error": str(e)}, ensure_ascii=False),
-            mimetype='application/json',
-            status=500
-        )
+        return jsonify({"error": str(e)}), 500
 
 if __name__ == "__main__":
     app.run(debug=True)
