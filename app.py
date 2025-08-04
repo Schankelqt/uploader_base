@@ -2,9 +2,10 @@ from flask import Flask, request, jsonify
 from github import Github
 from dotenv import load_dotenv
 import os
-import requests
 
+# Загружаем переменные окружения из .env
 load_dotenv()
+
 app = Flask(__name__)
 
 @app.route("/", methods=["GET"])
@@ -14,62 +15,55 @@ def home():
 @app.route("/upload", methods=["POST"])
 def upload():
     try:
-        # --- 1. Попытка получить JSON
-        data = {}
-        if request.is_json:
-            data = request.get_json()
-            app.logger.info(f"📥 Получен JSON: {data}")
-        else:
-            app.logger.info("⚠️ JSON не получен: content-type не application/json")
+        # Логируем заголовки и тело запроса
+        app.logger.info(f"📦 Headers: {dict(request.headers)}")
+        app.logger.info(f"📦 Raw body: {request.data}")
 
-        file = request.files.get("file")
-        file_url = data.get("file_url") if data else None
+        # Пытаемся распарсить JSON или form-data
+        try:
+            data = request.get_json(force=True)
+        except Exception:
+            data = request.form.to_dict()
 
-        if not file and file_url:
-            # --- 2. Загружаем файл по ссылке
-            app.logger.info(f"🔗 URL файла: {file_url}")
-            if not file_url.endswith(".xmind"):
-                return jsonify({"error": "❌ Поддерживаются только файлы с расширением .xmind"}), 400
+        app.logger.info(f"📥 Получен JSON или Form: {data}")
 
-            r = requests.get(file_url)
-            if r.status_code != 200:
-                return jsonify({"error": f"❌ Не удалось загрузить файл по ссылке. Код: {r.status_code}"}), 400
+        file_url = data.get("file_url")
+        if not file_url:
+            return jsonify({"error": "❌ Не удалось получить file_url из запроса"}), 400
 
-            content = r.content
-            filename = os.path.basename(file_url)
-        elif file:
-            filename = file.filename
-            if not filename.endswith(".xmind"):
-                return jsonify({"error": "❌ Поддерживаются только файлы с расширением .xmind"}), 400
-            content = file.read()
-        else:
-            return jsonify({"error": "❌ Файл не передан"}), 400
+        app.logger.info(f"🔗 URL файла: {file_url}")
 
-        # --- 3. Загрузка в GitHub
+        # Проверка расширения
+        if not file_url.endswith(".xmind"):
+            return jsonify({"error": "❌ Поддерживаются только файлы с расширением .xmind"}), 400
+
+        # Скачиваем файл по URL
+        import requests
+        response = requests.get(file_url)
+        if response.status_code != 200:
+            return jsonify({"error": f"❌ Не удалось скачать файл: {response.status_code}"}), 400
+
+        file_content = response.content
+        filename = file_url.split("/")[-1]
+
+        # Загружаем настройки GitHub
         github_token = os.getenv("GITHUB_TOKEN")
         repo_name = os.getenv("GITHUB_REPO")
         branch = os.getenv("GITHUB_BRANCH", "main")
         target_path = os.getenv("GITHUB_TARGET_PATH", "matrix.xmind")
 
+        # Обновляем файл на GitHub
         g = Github(github_token)
         repo = g.get_repo(repo_name)
+        current_file = repo.get_contents(target_path, ref=branch)
 
-        try:
-            current_file = repo.get_contents(target_path, ref=branch)
-            repo.update_file(
-                path=target_path,
-                message=f"Обновление файла {filename} через Dify",
-                content=content,
-                sha=current_file.sha,
-                branch=branch
-            )
-        except Exception:
-            repo.create_file(
-                path=target_path,
-                message=f"Первое добавление файла {filename} через Dify",
-                content=content,
-                branch=branch
-            )
+        repo.update_file(
+            path=target_path,
+            message=f"Автоматическое обновление файла {filename} через Dify",
+            content=file_content,
+            sha=current_file.sha,
+            branch=branch
+        )
 
         return jsonify({"message": "✅ Файл успешно обновлён на GitHub"}), 200
 
